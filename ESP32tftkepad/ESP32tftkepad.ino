@@ -3,161 +3,180 @@
 #include <Keypad.h>
 #include <Wire.h>
 
-TFT_eSPI tft = TFT_eSPI();  // TFT instance
+TFT_eSPI tft = TFT_eSPI();
 
-#define MAX_KEYPAD_ROWS    4
-#define MAX_KEYPAD_COLMS   4
+// Color order setting
+#define TFT_RGB_ORDER TFT_RGB   // Colour order Red-Green-Blue
 
-#define KEYPAD_TASK_NAME        "KEYTSK"
-#define KEYPAD_TASK_STACK_SIZE  (2 * 1024) // 2KB
+// Colors - Updated to match the provided image
+#define BG_COLOR TFT_BLUE
+#define TEXT_COLOR TFT_WHITE
+#define HIGHLIGHT_COLOR 0xADD8E6
+
+// Keypad Navigation Mapping
+#define KEY_UP 'B'
+#define KEY_DOWN 'C'
+#define KEY_SELECT 'D'
+
+// Positions and sizes (adjust based on your display)
+int logoX = tft.width() / 2;
+int logoY = 30;
+int logoFontSize = 2;
+String logoText = "Sound Box";
+
+int itemStartY = 80;
+int itemSpacing = 30;
+int iconSize = 24;
+int textOffsetX = 30;
+int itemFontSize = 2;
+
+// Menu Items with Icons (Basic Text Icons for this example)
+String menuItems[] = {"QR Code Pay", "NFC Pay", "History", "Settings"};
+String menuIcons[] = {"QR", "NFC", "Hist", "Set"};
+int selectedItem = 0;
+int previousItem = 0;
+
+// Keypad
+#define MAX_KEYPAD_ROWS 4
+#define MAX_KEYPAD_COLMS 4
 
 // Keypad matrix layout
 char gcaKeyMapMtx[MAX_KEYPAD_ROWS][MAX_KEYPAD_COLMS] = {
-  {'1','2','3', 'A'},
-  {'4','5','6', 'B'},
-  {'7','8','9', 'C'},
-  {'*','0','#', 'D'}
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
 };
 
-// Row and column pins - Based on your initial request
+// Row and column pins -  Match your ESP32-S3 connections.  Make sure these match your actual wiring.
 uint8_t gacKeypadRowPins[MAX_KEYPAD_ROWS] = {14, 21, 45, 38};
 uint8_t gacKeypadColPins[MAX_KEYPAD_COLMS] = {7, 5, 15, 6};
 
 // Keypad object
 Keypad keypad = Keypad(makeKeymap(gcaKeyMapMtx), gacKeypadRowPins, gacKeypadColPins, MAX_KEYPAD_ROWS, MAX_KEYPAD_COLMS);
 
-// FreeRTOS task handle
-TaskHandle_t gtskkeypadHandle = NULL;
+void drawHomeScreen() {
+  tft.fillScreen(BG_COLOR);
+  tft.setTextColor(TEXT_COLOR);
 
-// TFT Display Pin Definitions
-#define TFT_MOSI 3   // Connect to the pin labeled "3"
-#define TFT_SCLK 4   // Connect to the pin labeled "4"
-#define TFT_CS   18  // Connect to the pin labeled "18"
-#define TFT_DC   16  // Connect to the pin labeled "16 (TX0)"
-#define TFT_RST  17  // Connect to the pin labeled "17 (RX0)"
+  // Draw Logo with color
+  tft.setTextSize(logoFontSize);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TEXT_COLOR); // Logo is white in your example
+  tft.drawString(logoText, logoX, logoY, 2);
+  tft.setTextColor(TEXT_COLOR); // Reset text color
 
-// Define the area where the input will be displayed
-const int INPUT_X = 10;
-const int INPUT_Y = 50;
-const int INPUT_TEXT_SIZE = 3;
-const uint16_t INPUT_COLOR = TFT_WHITE;
-const uint16_t BACKGROUND_COLOR = TFT_BLACK;
+  // Draw Menu Items (without highlighting initially)
+  tft.setTextSize(itemFontSize);
+  tft.setTextDatum(ML_DATUM);
+  for (int i = 0; i < 4; i++) {
+    int yPos = itemStartY + i * itemSpacing;
+    tft.setTextColor(TEXT_COLOR); // Ensure default text color
+    tft.setTextSize(1);
+    tft.drawString(menuIcons[i], 25, yPos, 2);
+    tft.setTextSize(itemFontSize);
+    tft.drawString(menuItems[i], 25 + iconSize + textOffsetX - 5, yPos, 2);
+  }
+  //draw initial highlight
+  int yPos = itemStartY + selectedItem * itemSpacing;
+  tft.fillRect(10, yPos - 12, tft.width() - 20, 24, HIGHLIGHT_COLOR);
+  tft.setTextColor(TEXT_COLOR);  //highlighted text is white
+  tft.setTextSize(1);
+  tft.drawString(menuIcons[selectedItem], 25, yPos, 2);
+  tft.setTextSize(itemFontSize);
+  tft.drawString(menuItems[selectedItem], 25 + iconSize + textOffsetX - 5, yPos, 2);
+}
 
-// Define the area for the "Enter float:" label
-const int LABEL_X = 10;
-const int LABEL_Y = 20;
-const int LABEL_TEXT_SIZE = 2;
+void updateSelection(char key) {
+  if (key == KEY_UP) {
+    previousItem = selectedItem;
+    selectedItem--;
+    if (selectedItem < 0) selectedItem = 3;
+    //erase previous highlight
+    int yPos = itemStartY + previousItem * itemSpacing;
+    tft.fillRect(10, yPos - 12, tft.width() - 20, 24, BG_COLOR);
+    tft.setTextColor(TEXT_COLOR);
+    tft.setTextSize(1);
+    tft.drawString(menuIcons[previousItem], 25, yPos, 2);
+    tft.setTextSize(itemFontSize);
+    tft.drawString(menuItems[previousItem], 25 + iconSize + textOffsetX - 5, yPos, 2);
 
-//
-// ─── Float Input Function with Partial Screen Update ─────────────────
-//
-float readFloatFromKeypadAndDisplayPartial() {
-  String inputBuffer = "";
-  tft.fillScreen(BACKGROUND_COLOR);
-  tft.setTextColor(INPUT_COLOR, BACKGROUND_COLOR);
-  tft.setTextSize(LABEL_TEXT_SIZE);
-  tft.setCursor(LABEL_X, LABEL_Y);
-  tft.println("Enter float:");
+    //draw new highlight
+    yPos = itemStartY + selectedItem * itemSpacing;
+    tft.fillRect(10, yPos - 12, tft.width() - 20, 24, HIGHLIGHT_COLOR);
+    tft.setTextColor(TEXT_COLOR);  //highlighted text is white
+    tft.setTextSize(1);
+    tft.drawString(menuIcons[selectedItem], 25, yPos, 2);
+    tft.setTextSize(itemFontSize);
+    tft.drawString(menuItems[selectedItem], 25 + iconSize + textOffsetX - 5, yPos, 2);
 
-  tft.setTextColor(INPUT_COLOR, BACKGROUND_COLOR);
-  tft.setTextSize(INPUT_TEXT_SIZE);
-  tft.setCursor(INPUT_X, INPUT_Y);
-  tft.print(inputBuffer);
+  } else if (key == KEY_DOWN) {
+    previousItem = selectedItem;
+    selectedItem++;
+    if (selectedItem > 3) selectedItem = 0;
 
-  while (true) {
-    char key = keypad.getKey();
-    if (key) {
-      if (key >= '0' && key <= '9') {
-        inputBuffer += key;
-        tft.setTextColor(INPUT_COLOR, BACKGROUND_COLOR);
-        tft.setTextSize(INPUT_TEXT_SIZE);
-        tft.setCursor(INPUT_X, INPUT_Y);
-        tft.print(inputBuffer);
-      } else if (key == 'A') {
-        if (inputBuffer.indexOf('.') == -1) {
-          inputBuffer += '.';
-          tft.setTextColor(INPUT_COLOR, BACKGROUND_COLOR);
-          tft.setTextSize(INPUT_TEXT_SIZE);
-          tft.setCursor(INPUT_X, INPUT_Y);
-          tft.print(inputBuffer);
-        }
-      } else if (key == 'D') {
-        float number = inputBuffer.toFloat();
-        Serial.print("Entered Float: ");
-        Serial.println(number);
-        tft.fillScreen(BACKGROUND_COLOR);
-        tft.setTextColor(INPUT_COLOR, BACKGROUND_COLOR);
-        tft.setTextSize(LABEL_TEXT_SIZE);
-        tft.setCursor(LABEL_X, LABEL_Y);
-        tft.println("You entered:");
-        tft.setTextColor(INPUT_COLOR, BACKGROUND_COLOR);
-        tft.setTextSize(INPUT_TEXT_SIZE);
-        tft.setCursor(INPUT_X, INPUT_Y);
-        tft.print(number);
-        delay(1000); // Show result for a short time
-        return number;
-      } else if (key == '*') {
-        // Clear only the input area
-        tft.fillRect(INPUT_X, INPUT_Y, tft.width(), INPUT_TEXT_SIZE * 10, BACKGROUND_COLOR); // Approximate height
-        inputBuffer = "";
-        tft.setTextColor(INPUT_COLOR, BACKGROUND_COLOR);
-        tft.setTextSize(INPUT_TEXT_SIZE);
-        tft.setCursor(INPUT_X, INPUT_Y);
-        tft.print(inputBuffer);
-        Serial.println("Input cleared");
-      }
+    //erase previous highlight.
+    int yPos = itemStartY + previousItem * itemSpacing;
+    tft.fillRect(10, yPos - 12, tft.width() - 20, 24, BG_COLOR);
+    tft.setTextColor(TEXT_COLOR);
+    tft.setTextSize(1);
+    tft.drawString(menuIcons[previousItem], 25, yPos, 2);
+    tft.setTextSize(itemFontSize);
+    tft.drawString(menuItems[previousItem], 25 + iconSize + textOffsetX - 5, yPos, 2);
 
-      Serial.print("Current Input: ");
-      Serial.println(inputBuffer);
-    }
-
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    //draw new highlight
+    yPos = itemStartY + selectedItem * itemSpacing;
+    tft.fillRect(10, yPos - 12, tft.width() - 20, 24, HIGHLIGHT_COLOR);
+    tft.setTextColor(TEXT_COLOR);  //highlighted text is white
+    tft.setTextSize(1);
+    tft.drawString(menuIcons[selectedItem], 25, yPos, 2);
+    tft.setTextSize(itemFontSize);
+    tft.drawString(menuItems[selectedItem], 25 + iconSize + textOffsetX - 5, yPos, 2);
   }
 }
 
-//
-// ─── FreeRTOS Task to Read Float Input and Display (Partial Update) ──
-//
-void KeypadReadProcess(void *pvParameters) {
-  while (1) {
-    Serial.println("Enter a float number using keypad. Press D to confirm:");
-    float value = readFloatFromKeypadAndDisplayPartial();
-
-    // Do something with the float value here
-    Serial.print("Final float value received: ");
-    Serial.println(value);
-
-    vTaskDelay(1000 / portTICK_PERIOD_MS); // Wait before asking again
+void handleSelection(char key) {
+  if (key == KEY_SELECT) {
+    tft.fillScreen(BG_COLOR);
+    tft.setTextColor(TEXT_COLOR);
+    tft.setTextSize(2);
+    if (selectedItem == 0) {
+      tft.println("Displaying QR Code...");
+      // Add code to generate and display QR code
+    } else if (selectedItem == 1) {
+      tft.println("Ready for NFC...");
+      // Add code for NFC interaction
+    } else if (selectedItem == 2) {
+      tft.println("Payment History...");
+      // Add code to display payment history
+    } else if (selectedItem == 3) {
+      tft.println("Settings Menu...");
+      // Add code for settings menu
+    }
+    delay(1000);
+    drawHomeScreen();
   }
 }
 
 void setup() {
   Serial.begin(115200);
   Serial.println("========= Before Setup End ============");
-
   // Initialize TFT display with the correct pins
   tft.init();
-  tft.setRotation(1);
-  tft.fillScreen(BACKGROUND_COLOR);
-  tft.setTextColor(INPUT_COLOR, BACKGROUND_COLOR);
-  tft.setTextSize(LABEL_TEXT_SIZE);
-  tft.setCursor(LABEL_X, LABEL_Y);
-  tft.println("Keypad Input:");
-
-#if 1
-  // Create keypad task pinned to core 1
-  xTaskCreatePinnedToCore(
-    KeypadReadProcess,
-    KEYPAD_TASK_NAME,
-    KEYPAD_TASK_STACK_SIZE,
-    NULL,
-    1,
-    &gtskkeypadHandle,
-    1 // Core 1
-  );
-#endif
+  tft.setRotation(0);
+  tft.fillScreen(BG_COLOR);
+  //tft.invertDisplay(false); // Remove this line.  The inversion is handled in User_Setup.h
+  drawHomeScreen();
 }
 
 void loop() {
-  // nothing
+  char key = keypad.getKey();
+
+  if (key) {
+    Serial.print("Key Pressed: ");
+    Serial.println(key);
+    updateSelection(key);
+    handleSelection(key);
+  }
+  delay(100);
 }
