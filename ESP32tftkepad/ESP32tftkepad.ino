@@ -2,34 +2,38 @@
 #include <SPI.h>
 #include <Keypad.h>
 #include <Wire.h>
+#include <esp_err.h>
+#include <qrcode.h> // ESP-IDF qrcode.h
+#include <string.h>
 
 TFT_eSPI tft = TFT_eSPI();
 
 // Color order setting
-#define TFT_RGB_ORDER TFT_RGB // Colour order Red-Green-Blue
+#define TFT_RGB_ORDER TFT_RGB
 
 // Colors
-#define BG_COLOR TFT_BLUE
-#define TEXT_COLOR TFT_WHITE
-#define HIGHLIGHT_COLOR 0xADD8E6
+#define BG_COLOR 0x00008B      // Dark Blue
+#define TEXT_COLOR TFT_WHITE    // White
+#define HIGHLIGHT_COLOR 0xADD8E6 // Light Blue
 
 // Keypad Navigation Mapping
 #define KEY_UP 'B'
 #define KEY_DOWN 'C'
 #define KEY_SELECT 'D'
 
-// Positions and sizes
+// Positions and sizes (adjust based on your display)
 int logoX = tft.width() / 2;
 int logoY = 30;
 int logoFontSize = 2;
 String logoText = "Sound Box";
+
 int itemStartY = 80;
 int itemSpacing = 30;
 int iconSize = 24;
 int textOffsetX = 30;
 int itemFontSize = 2;
 
-// Menu Items with Icons
+// Menu Items with Icons (Basic Text Icons for this example)
 String menuItems[] = {"QR Code Pay", "NFC Pay", "History", "Settings"};
 String menuIcons[] = {"QR", "NFC", "Hist", "Set"};
 int selectedItem = 0;
@@ -47,6 +51,9 @@ uint8_t gacKeypadRowPins[MAX_KEYPAD_ROWS] = {14, 21, 45, 38};
 uint8_t gacKeypadColPins[MAX_KEYPAD_COLMS] = {7, 5, 15, 6};
 Keypad keypad = Keypad(makeKeymap(gcaKeyMapMtx), gacKeypadRowPins, gacKeypadColPins, MAX_KEYPAD_ROWS, MAX_KEYPAD_COLMS);
 
+// Assume this is your UPI ID
+String upiID = "6379175223@ptaxis";
+
 // Function to get payment amount
 String getPaymentAmount()
 {
@@ -57,7 +64,7 @@ String getPaymentAmount()
     tft.drawString("Enter Amount:", tft.width() / 2, tft.height() / 2 - 30, 2);
 
     String amount = "";
-    bool decimalPointEntered = false; // Flag to track decimal point
+    bool decimalPointEntered = false;
     int xPos = tft.width() / 2;
     int yPos = tft.height() / 2;
 
@@ -69,28 +76,28 @@ String getPaymentAmount()
             if (key >= '0' && key <= '9')
             {
                 amount += key;
-                tft.fillRoundRect(xPos - 50, yPos - 15, 100, 30, 5, BG_COLOR); //erase
-                tft.drawString(amount, xPos, yPos, 2);                                 //display the amount
+                tft.fillRoundRect(xPos - 50, yPos - 15, 100, 30, 5, BG_COLOR);
+                tft.drawString(amount, xPos, yPos, 2);
             }
             else if (key == 'A')
             {
                 if (!decimalPointEntered)
-                { // Only one decimal point allowed
+                {
                     amount += '.';
                     decimalPointEntered = true;
-                    tft.fillRoundRect(xPos - 50, yPos - 15, 100, 30, 5, BG_COLOR); //erase
+                    tft.fillRoundRect(xPos - 50, yPos - 15, 100, 30, 5, BG_COLOR);
                     tft.drawString(amount, xPos, yPos, 2);
                 }
             }
             else if (key == 'D')
-            { // Use 'D' as the Enter key
+            {
                 if (amount.length() > 0)
                 {
-                    return amount; // Return the amount string
+                    return amount;
                 }
             }
             else if (key == '*')
-            { // Clear
+            {
                 amount = "";
                 decimalPointEntered = false;
                 tft.fillScreen(BG_COLOR);
@@ -99,50 +106,71 @@ String getPaymentAmount()
                 tft.setTextDatum(MC_DATUM);
                 tft.drawString("Enter Amount:", tft.width() / 2, tft.height() / 2 - 30, 2);
             }
-            delay(100); // Debounce
+            delay(100);
         }
     }
 }
 
-// Function to generate QR code
-void generateUpiQRCode(String upiId, String amount)
+// Function to display the QR code on the TFT using ESP-IDF data
+void displayQRCodeOnTFT(esp_qrcode_handle_t qrcode)
 {
-    tft.fillScreen(BG_COLOR);
-    tft.setTextColor(TEXT_COLOR);
-    tft.setTextSize(2);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString("Generating QR Code...", tft.width() / 2, tft.height() / 2 - 30, 2);
-    Serial.println("Generating QR Code for UPI ID: " + upiId + ", Amount: " + amount);
+    int size = esp_qrcode_get_size(qrcode);
+    int moduleSize;
+    int offsetX, offsetY;
 
-    // Construct the UPI QR code data string
-    String qrData = "upi://pay?pa=" + upiId + "&am=" + amount; // Basic UPI format.  Add  currency code &cu=INR
+    // Calculate module size to fit QR code with a margin
+    if (size > 0) {
+        moduleSize = min((tft.width() - 20) / size, (tft.height() - 20) / size);  // 20 for margin
+        if (moduleSize < 1) {
+          moduleSize = 1;
+        }
+        offsetX = (tft.width() - size * moduleSize) / 2;
+        offsetY = (tft.height() - size * moduleSize) / 2;
+    } else {
+        Serial.println("Error: QR code size is invalid.");
+        return;
+    }
 
-    // Replace this with your actual QR code generation code
-    // You might use a library like QRCode.h
-    // The library will provide functions to encode the data string (qrData)
-    // into a QR code, and then you'll use TFT_eSPI functions to draw the
-    // pixels of the QR code on the screen.  The example below is a placeholder.
+    tft.fillScreen(TFT_BLUE); // Clear the screen with the defined background color
+    for (int y = 0; y < size; y++)
+    {
+        for (int x = 0; x < size; x++)
+        {
+            if (esp_qrcode_get_module(qrcode, x, y))
+            {
+                tft.fillRect(offsetX + x * moduleSize, offsetY + y * moduleSize, moduleSize, moduleSize, TFT_BLACK);
+            }
+        }
+    }
+}
 
-    delay(2000);       // Simulate QR code generation delay
-    tft.fillScreen(BG_COLOR); // Clear the screen
-    tft.setTextColor(TEXT_COLOR);
-    tft.setTextSize(2);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString("Scan this QR Code to Pay", tft.width() / 2, tft.height() / 2 - 60, 2);
-     tft.setTextSize(1);
-    tft.drawString(qrData, tft.width() / 2, tft.height() / 2 - 20, 2);
-    // Example (Conceptual - Replace with actual drawing code):
-    //  QRCode qrCode;
-    //  qrCode.encodeText(qrData);
-    //  for (int y = 0; y < qrCode.size; y++) {
-    //    for (int x = 0; x < qrCode.size; x++) {
-    //      if (qrCode.isBlack(x, y)) {
-    //        tft.drawPixel(x, y, TFT_BLACK); // Or a suitable color
-    //      }
-    //    }
-    //  }
+// Function to generate and display QR code using ESP-IDF
+void GenerateAndDisplayQR(const char *upiData)
+{
+    esp_qrcode_config_t qrcode_config = ESP_QRCODE_CONFIG_DEFAULT();
+    qrcode_config.display_func = displayQRCodeOnTFT; // Set our display function
 
-    delay(5000); // Display the QR code for 5 seconds
+    esp_err_t err = esp_qrcode_generate(&qrcode_config, upiData);
+    if (err != ESP_OK)
+    {
+        Serial.println("QR code generation failed!");
+        if (err == ESP_ERR_NO_MEM)
+        {
+            Serial.println("Error: Not enough memory to generate QR code.");
+        }
+        // Consider adding a TFT display message here to inform the user
+        return; // Exit the function on error
+    }
+    // The display function is called by esp_qrcode_generate
+}
+
+// This function generates a UPI string with the given amount
+String CreateUPIString(float f32Amount)
+{
+    String upiString = "upi://pay?pa=" + upiID + "&pn=Merchant&mc=123456&tid=1234567890&tr=1234567890&tn=Payment%20for%20goods&am=";
+    upiString += String(f32Amount, 2);
+    upiString += "&cu=INR&url=https://www.merchantwebsite.com";
+    return upiString;
 }
 
 void drawHomeScreen()
@@ -239,31 +267,28 @@ void handleSelection(char key)
         if (selectedItem == 0)
         {
             // QR Code Pay selected
-            String amount = getPaymentAmount(); // Get amount as string
+            String amount = getPaymentAmount();
             Serial.println("Amount entered: " + amount);
-            //  Pass a fixed UPI ID for this example
-            String upiId = "6379175223@ptaxis"; // Replace with actual UPI ID
-            generateUpiQRCode(upiId, amount);     // Pass UPI ID and amount
-            drawHomeScreen();
+            String upi_string = CreateUPIString(amount.toFloat());
+            GenerateAndDisplayQR(upi_string.c_str()); // Pass as const char*
+            delay(5000); // Display QR code for 5 seconds
+            //drawHomeScreen();     
         }
         else if (selectedItem == 1)
         {
             tft.println("Ready for NFC...");
-            // Add code for NFC interaction
             delay(1000);
             drawHomeScreen();
         }
         else if (selectedItem == 2)
         {
             tft.println("Payment History...");
-            // Add code to display payment history
             delay(1000);
             drawHomeScreen();
         }
         else if (selectedItem == 3)
         {
             tft.println("Settings Menu...");
-            // Add code for settings menu
             delay(1000);
             drawHomeScreen();
         }
@@ -273,10 +298,8 @@ void handleSelection(char key)
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("========= Before Setup End ============");
-    // Initialize TFT display
     tft.init();
-    tft.setRotation(1);
+    tft.setRotation(0);
     tft.fillScreen(BG_COLOR);
     drawHomeScreen();
 }
